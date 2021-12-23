@@ -1,7 +1,7 @@
-
 # Rancher Memory/Image Nuke
 
 Weekly cleanup of Rancher worker nodes memory and images from container.registry.io registry.
+Please check the relevant [Blogpost](https://redshubh.medium.com/prune-container-images-from-rancher-using-kubernetes-cronjob-and-binaries-4bd3442c7be)
 
 ## Rancher Prune Task
 
