@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "generic-azdo-deploy-chart.fullname" . }}
+  labels:
+    {{- include "generic-azdo-deploy-chart.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "generic-azdo-deploy-chart.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "generic-azdo-deploy-chart.labels" . | nindent 8 }}
+      annotations:
+        {{- include "generic-azdo-deploy-chart.annotation.helm-revision" . | nindent 8 }}
+    spec:
+      containers:
+        - name: {{ .Values.appName }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.containerPort }}
+          resources:
+            {{- include "generic-azdo-deploy-chart.resources" . }}
+        {{- include "generic-azdo-deploy-chart.probes" . | nindent 8 }}

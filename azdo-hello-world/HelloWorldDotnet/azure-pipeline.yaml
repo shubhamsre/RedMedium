@@ -1,0 +1,209 @@
+trigger:
+  branches:
+    include:
+      - master
+
+variables:
+  # Azure Container Registry details
+  Build.Acr: azdoImageRegistry
+  Build.ImageRepository: helloworldapp
+  Build.DockerfilePath: '$(Build.SourcesDirectory)/HelloWorldDotnet/HelloWorldApp/Dockerfile'
+
+stages:
+  - stage: Build
+    jobs:
+      - job: BuildAndPush
+        pool:
+          name: vagrant-ubuntu
+        steps:
+          - task: UseDotNet@2
+            inputs:
+              packageType: 'sdk'
+              version: '8.x'
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+
+          - checkout: self
+            fetchDepth: 1
+
+          - script: |
+              commitId=$(Build.SourceVersion)
+              echo "Commit ID: $commitId"
+              shortCommitId=${commitId:0:7}
+              echo "Short Commit ID: $shortCommitId"
+              echo "##vso[task.setvariable variable=shortCommitId;isOutput=true]$shortCommitId"
+            name: setShortCommitId
+            displayName: 'Set Short Commit ID'
+          - script: |
+              echo "Short Commit ID from previous step: $(setShortCommitId.shortCommitId)"
+            displayName: 'Display Short Commit ID'
+          - task: Docker@2
+            displayName: 'Build and Push Image to Azure Container Registry'
+            inputs:
+              containerRegistry: $(Build.Acr)
+              repository: $(Build.ImageRepository)
+              command: 'buildAndPush'
+              Dockerfile: $(Build.DockerfilePath)
+              tags: |
+                $(Build.BuildId)-$(setShortCommitId.shortCommitId)
+
+  - stage: Test
+    dependsOn: Build
+    condition: succeeded('Build')
+    jobs:
+      - job: Test
+        pool:
+          name: vagrant-ubuntu
+        steps:
+          - task: UseDotNet@2
+            inputs:
+              packageType: 'sdk'
+              version: '8.x'
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+
+          - checkout: self
+            fetchDepth: 1
+
+          - script: |
+              dotnet new xunit -o HelloWorldTests
+            displayName: 'Create Test Project'
+
+          - task: DotNetCoreCLI@2
+            inputs:
+              command: 'restore'
+              projects: '**/HelloWorldTests.csproj'
+            displayName: 'Restore Test Project Dependencies'
+
+          - script: |
+              dotnet test HelloWorldTests/HelloWorldTests.csproj --collect:"XPlat Code Coverage"
+            displayName: 'Run Tests and Collect Code Coverage'
+
+          - task: PublishCodeCoverageResults@2
+            inputs:
+              codeCoverageTool: 'cobertura'
+              summaryFileLocation: '$(Agent.TempDirectory)/**/*.xml'
+              reportDirectory: '$(Build.SourcesDirectory)/CodeCoverage'
+            displayName: 'Publish Code Coverage Results'
+
+  - stage: Deploy
+    dependsOn: Build
+    condition: succeeded('Build')
+    jobs:
+      - deployment: DeployStaging
+        pool:
+          name: vagrant-ubuntu
+        variables:
+          shortBuildCommitId: $[ stageDependencies.Build.BuildAndPush.outputs['setShortCommitId.shortCommitId'] ]
+        environment: 'azdo-k8s-hw-stg'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: |
+                    echo "Build Sources Directory: $(Build.SourcesDirectory)"
+                    echo "Searching for staging.yaml and production.yaml in $(Pipeline.Workspace) and $(Build.SourcesDirectory)..."
+                    find $(Pipeline.Workspace) -name "staging.yaml" -o -name "production.yaml"
+                    find $(Build.SourcesDirectory) -name "staging.yaml" -o -name "production.yaml"
+                    echo "Displaying directory structure of $(Build.SourcesDirectory)..."
+                    tree $(Build.SourcesDirectory)
+                    echo "shortBuildCommitId: $(shortBuildCommitId)"
+                  displayName: 'Display file structure and other variables'
+
+                - task: HelmDeploy@0
+                  inputs:
+                    # Helm deployment configuration for staging
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceConnection: 'azdo-k8s-azdo-k8s-hw-stg'
+                    namespace: 'azdo-k8s-hw-stg'
+                    command: 'upgrade'
+                    chartType: 'FilePath'
+                    chartPath: '$(Build.SourcesDirectory)/generic-azdo-deploy-chart'
+                    releaseName: 'azdo-helloworld'
+                    valueFile: '$(Build.SourcesDirectory)/HelloWorldDotnet/staging.yaml'
+                    overrideValues: |
+                      image.repository=$(Build.Acr).azurecr.io/$(Build.ImageRepository)
+                      image.tag=$(Build.BuildId)-$(shortBuildCommitId)
+
+  # - stage: IntegrationTest
+  #   dependsOn: DeployStaging
+  #   condition: succeeded('DeployStaging')
+  #   jobs:
+  #     - job: IntegrationTestStaging
+  #       displayName: "Integration Test - Staging" 
+  #       pool:
+  #         name: vagrant-ubuntu
+  #       steps: 
+  #         - task: WaitForStagingDeployment@1
+  #           inputs:
+  #             kubernetesServiceConnection: 'azdo-k8s-azdo-k8s-hw-stg'
+  #             namespace: 'azdo-k8s-hw-stg'
+  #             timeout: '5m'
+  #         - task: Bash@3
+  #           inputs:
+  #             targetType: 'inline'
+  #             script: |
+  #               # Perform integration tests here, for example, sending an HTTP request to the application endpoint
+  #               curl http://<staging-app-url>
+  #           displayName: 'Perform Integration Tests'
+
+  - stage: DeployProduction
+    dependsOn: Deploy
+    condition: succeeded('Deploy')
+    jobs:
+      - deployment: DeployProduction
+        pool:
+          name: vagrant-ubuntu
+        variables:
+          shortBuildCommitId: $[ stageDependencies.Build.BuildAndPush.outputs['setShortCommitId.shortCommitId'] ]
+        environment: 'azdo-k8s-hw-prd'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  fetchDepth: 1
+
+                - script: |
+                    commitId=$(Build.SourceVersion)
+                    echo "Commit ID: $commitId"
+                    prdShortCommitId=${commitId:0:7}
+                    echo "Short Commit ID: $prdShortCommitId"
+                    echo "##vso[task.setvariable variable=prdShortCommitId;isOutput=true]$prdShortCommitId"
+                  name: setPrdShortCommitId
+                  displayName: 'Set Prd Short Commit ID'
+
+                - task: HelmDeploy@0
+                  inputs:
+                    # Helm deployment configuration for production
+                    connectionType: 'Kubernetes Service Connection'
+                    kubernetesServiceConnection: 'azdo-k8s-azdo-k8s-hw-prd'
+                    namespace: 'azdo-k8s-hw-prd'
+                    command: 'upgrade'
+                    chartType: 'FilePath'
+                    chartPath: '$(Build.SourcesDirectory)/generic-azdo-deploy-chart'
+                    releaseName: 'azdo-helloworld'
+                    valueFile: '$(Build.SourcesDirectory)/HelloWorldDotnet/production.yaml'
+                    overrideValues: |
+                      image.repository=$(Build.Acr).azurecr.io/$(Build.ImageRepository)
+                      image.tag=$(Build.BuildId)-$(setPrdShortCommitId.prdShortCommitId)
+
+  # - stage: IntegrationTestProduction
+  #   dependsOn: DeployProduction
+  #   condition: succeeded('DeployProduction')
+  #   jobs:
+  #     - job: IntegrationTestProduction
+  #       displayName: "Integration Test - Production"
+  #       pool:
+  #         name: vagrant-ubuntu
+  #       steps:
+  #         - task: WaitForProductionDeployment@1  
+  #           inputs:
+  #             kubernetesServiceConnection: 'KubernetesServiceConnection'
+  #             namespace: 'azdo-k8s-hw-prd'
+  #             timeout: '5m'
+  #         - task: Bash@3
+  #           inputs:
+  #             targetType: 'inline'
+  #             script: |
+  #               # Perform integration tests here, for example, sending an HTTP request to the application endpoint
+  #               curl http://<production-app-url>
+  #           displayName: 'Perform Integration Tests - Production'

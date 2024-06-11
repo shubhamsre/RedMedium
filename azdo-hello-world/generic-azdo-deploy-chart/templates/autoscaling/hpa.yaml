@@ -1,0 +1,23 @@
+{{/* Define Horizontal Pod Autoscaler v2 */}}
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "generic-azdo-deploy-chart.fullname" . }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "generic-azdo-deploy-chart.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    {{- range .Values.autoscaling.metrics }}
+    - type: {{ .type }}
+      resource:
+        name: {{ .resource.name }}
+        target:
+          type: {{ .resource.target.type }}
+          averageUtilization: {{ .resource.target.averageUtilization }}
+    {{- end }}
+{{- end }}
