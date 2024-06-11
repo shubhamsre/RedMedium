@@ -1,0 +1,58 @@
+replicaCount: 1
+environment: staging
+ingress:
+  enabled: false
+  host: staging-azdo-k8s-hw01.tej.com
+  path: /helloWorld
+image:
+  repository: azdoimageregistry.azurecr.io/helloworldapp
+  tag: 26-7df849e
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+containerPort: 8080
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+healthProbes:
+  enabled: true
+  startupProbe: 
+    path: /healthCheck
+    port: 8080
+    periodSeconds: 10
+    failureThreshold: 30
+  livenessProbe: 
+    path: /healthCheck
+    port: 8080
+    initialDelaySeconds: 2
+    periodSeconds: 20
+  readinessProbe: 
+    path: /healthCheck
+    port: 8080
+    initialDelaySeconds: 2
+    periodSeconds: 15
+resources:
+  limits:
+    memory: "200Mi"
+    cpu: "100m"
+  requests:
+    memory: "100Mi"
+    cpu: "10m"
+appName: azdo-helloworld
+
